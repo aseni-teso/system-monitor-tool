@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Disk metric helpers
+# Disk metric helpers for root filesystem.
+#
+# Returns:
+#   get_disk_root_bytes() -> "<used_bytes> <size_bytes> <used_percent>" (e.g. "12345678 98765432 12%")
+#   get_disk_root_human() -> human-readeble string, e.g. "11G used 50G (22%)"
+#
+# Output format examlpe:
+#   $ get_disk_root_bytes
+#   12345678 98765432 12%
 
 set -uo pipefail
 

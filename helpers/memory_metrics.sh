@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# Memory metric helpers
+# Memory metric helpers.
+#
+# Returns:
+#   get_memory_raw() -> "total used free" (integers, bytes)
+#   get_memory_usage_human() -> string  - human-readeble "used/total (XX.XX%)", e.g. "1.2GiB/4.0GiB (30.00%)"
+#   read_memory_values() -> prints "total used free" (integers, bytes) for callers to read
+#
+# Output format example:
+#   $ get_memory_raw
+#   17179869184 5284823040 11895046144
 
 set -uo pipefail
 
