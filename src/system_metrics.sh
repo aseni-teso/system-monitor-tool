@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# system-metrics.sh
-# Simple, reliable metrics collection "core".
+# Main CLI: text / json output and ability to start Prometheus exporter (subcommand "exporter").
 
 set -uo pipefail
 
@@ -8,22 +7,33 @@ set -uo pipefail
 export LC_NUMERIC=C
 export LANG=C.UTF-8
 
-# Colors
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+. "${ROOT_DIR}/helpers/cpu_metrics.sh"
+. "${ROOT_DIR}/helpers/memory_metrics.sh"
+. "${ROOT_DIR}/helpers/disk_metrics.sh"
 
-# Interval (seconds) between updates in watch mode; 0 = run once
-INTERVAL=0
-# Max command width to compact display (will be adjusted to terminal width)
+CONFIG_FILE="${ROOT_DIR}/../configs/metrics_config.conf"
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck source=/dev/null
+  . "$CONFIG_FILE"
+fi
+
+: "${COLLECTION_INTERVAL:=0}"
+: "${PROMETHEUS_PORT:=9100}"
+: "${OUTPUT_FORMAT:=text}"
+: "${TOP_PROCS_COUNT:=5}"
+
+RED='\033[0;31m'; YELLOW='\033[0;33m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
+
+INTERVAL="${COLLECTION_INTERVAL}"
 
 usage () {
   cat <<EOF
-Usage: $0 [--watch seconds] [--json] [--help] [--max-cmd N]
+Usage: $0 [--watch seconds] [--json] [--exporter port] [--help]
   --watch seconds   Repeat collection every seconds (default: run once)
   --json            Output results in JSON (one-shot, ignores colors)
+  --exporter port   Start Prometheus exporter on given port (default ${PROMETHEUS_PORT})
   --help            Show this message
 EOF
 }
@@ -38,19 +48,17 @@ truncate_cmd() {
   fi
 }
 
-# Determine max cmd width based on terminal width
 compute_max_cmd() {
   local cols
   cols=$(tput cols 2>/dev/null || echo 80)
-  local reserved=36
+  local reserved=36 # space for columns
   local max=$((cols - reserved))
   if [[ $max -lt 20 ]]; then max=20; fi
   echo "$max"
 }
 
-# Print top N procs with truncated CMD
 print_top_procs_compact() {
-  local sortfield="${1:-%cpu}" n=${2:-5} maxcmd
+  local sortfield="${1:-%cpu}" n=${2:-${TOP_PROCS_COUNT:-5}} maxcmd
   maxcmd=$(compute_max_cmd)
   printf "  %-12s %-6s %6s %6s  %s\n" "USER" "PID" "%CPU" "%MEM" "CMD"
   ps -eo user,pid,pcpu,pmem,cmd --sort=-${sortfield} | awk -v n="$n" -v maxcmd="$maxcmd" '
@@ -65,72 +73,33 @@ print_top_procs_compact() {
     }'
 }
 
-# Get CPU load (load averages)
-get_cpu_load() {
-  printf "%s\n" "$(uptime | awk -F'load average:' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')"
-}
-
-# Get memory usage (bytes and percent)
-get_memory_usage() {
-  read total used free <<<$(free -b | awk '/^Mem:/ {printf "%d %d %d",$2,$3,$4}')
-  if [[ -n "$total" && "$total" -gt 0 ]]; then
-    mem_percent=$(LC_NUMERIC=C awk -v u="$used" -v t="$total" 'BEGIN{OFS="."; printf "%.2f", u*100/t}')
-    if command -v numfmt >/dev/null 2>&1; then
-      human_total=$(numfmt --to=iec-i --suffix=B "$total")
-      human_used=$(numfmt --to=iec-i --suffix=B "$used")
-    else
-      human_total="${total}B"
-      human_used="${used}B"
-    fi
-    printf "%s/%s (%.2f%%)\n" "$human_used" "$human_total" "$mem_percent"
-  else
-    echo "N/A"
-  fi
-}
-
-# Disk usage for /
-get_disk_usage_root() {
-  df -B1 / 2>/dev/null | awk 'NR==2{printf "%s used %s (%s)\n",$3,$2,$5}' || \
-  df -h / 2>/dev/null | awk 'NR==2{printf "%s used %s (%s)\n",$3,$2,$5}'
-}
-
-# Collect all metrics as colored text
 collect_text() {
   local maxcmd
   maxcmd=$(compute_max_cmd)
   echo -e "${GREEN}=== System Metrics ===${NC}"
   echo -e "${BLUE}Timestamp:${NC} $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo -e "${BLUE}CPU Load (1,5,15):${NC} $(get_cpu_load)"
-  echo -e "${BLUE}Memory:${NC} $(get_memory_usage)"
-  echo -e "${BLUE}Disk (/) :${NC} $(get_disk_usage_root)"
-  echo -e "${BLUE}Top 5 CPU processes:${NC}"
-  print_top_procs_compact "%cpu" 5 "$maxcmd" | sed 's/^/  /'
-  echo -e "${BLUE}Top 5 Memory processes:${NC}"
-  print_top_procs_compact "%mem" 5 "$maxcmd" | sed 's/^/  /'
+  echo -e "${BLUE}Memory:${NC} $(get_memory_usage_human)"
+  echo -e "${BLUE}Disk (/) :${NC} $(get_disk_root_human)"
+  echo -e "${BLUE}Top ${TOP_PROCS_COUNT} CPU processes:${NC}"
+  print_top_procs_compact "%cpu" ${TOP_PROCS_COUNT} "$maxcmd" | sed 's/^/  /'
+  echo -e "${BLUE}Top ${TOP_PROCS_COUNT} Memory processes:${NC}"
+  print_top_procs_compact "%mem" ${TOP_PROCS_COUNT} "$maxcmd" | sed 's/^/  /'
 }
 
-# Collect all metrics as JSON (no color)
 collect_json () {
+  read total used free_bytes <<<"$(read_memory_values)"
+  mem_percent=$(LC_NUMERIC=C awk -v u="$used" -v t="$total" 'BEGIN{printf "%.2f", (t>0)?u*100/t:0}')
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cpu_load=$(get_cpu_load | sed 's/^ *//;s/"/\\"/g')
-
-  read total used free <<<$(free -b | awk '/^Mem:/ {printf "%d %d %d",$2,$3,$4}')
-  mem_percent=null
-  if [[ -n "$total" && "$total" -gt 0 ]]; then
-    mem_percent=$(LC_NUMERIC=C awk -v u="$used" -v t="$total" 'BEGIN{printf "%.2f", u*100/t}')
-  fi
-
-  disk_raw=$(df -B1 / 2>/dev/null | awk 'NR==2{printf "{\"used\":%d,\"size\":%d,\"use_percent\":\"%s\"}",$3,$2,$5}')
-  if [[ -z "$disk_raw" ]]; then
-    disk_raw=null
-  fi
-
-  top_cpu=$(ps aux --sort=-%cpu | head -n 6 | awk 'NR>1{cmd=""; for(i=11;i<=NF;i++){cmd=cmd (i==11?"":" ") $i} gsub(/"/,"\\\"",cmd); printf "{\"user\":\"%s\",\"pid\":%s,\"pcpu\":%s,\"pmem\":%s,\"cmd\":\"%s\"}%s",$1,$2,$3,$4,cmd,(NR==6?"":",") }')
-  top_mem=$(ps aux --sort=-%mem | head -n 6 | awk 'NR>1{cmd=""; for(i=11;i<=NF;i++){cmd=cmd (i==11?"":" ") $i} gsub(/"/,"\\\"",cmd); printf "{\"user\":\"%s\",\"pid\":%s,\"pcpu\":%s,\"pmem\":%s,\"cmd\":\"%s\"}%s",$1,$2,$3,$4,cmd,(NR==6?"":",") }')
+  disk_raw=$(get_disk_root_bytes || echo "0 0 0%")
+  read disk_used disk_size disk_percent <<<"$disk_raw"
+  top_cpu=$(ps aux --sort=-%cpu | head -n $((TOP_PROCS_COUNT + 1)) | awk 'NR>1{cmd=""; for(i=11;i<=NF;i++){cmd=cmd (i==11?"":" ") $i} gsub(/"/,"\\\"",cmd); printf "{\"user\":\"%s\",\"pid\":%s,\"pcpu\":%s,\"pmem\":%s,\"cmd\":\"%s\"}%s",$1,$2,$3,$4,cmd,(NR== (ENVIRON["TOP_N"]+1)?"":",") }' TOP_N="$TOP_PROCS_COUNT")
+  top_mem=$(ps aux --sort=-%mem | head -n $((TOP_PROCS_COUNT + 1)) | awk 'NR>1{cmd=""; for(i=11;i<=NF;i++){cmd=cmd (i==11?"":" ") $i} gsub(/"/,"\\\"",cmd); printf "{\"user\":\"%s\",\"pid\":%s,\"pcpu\":%s,\"pmem\":%s,\"cmd\":\"%s\"}%s",$1,$2,$3,$4,cmd,(NR== (ENVIRON["TOP_N"]+1)?"":",") }' TOP_N="$TOP_PROCS_COUNT")
 
   cat <<EOF
 {
-  "timestamp": "${timestamp}",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "cpu_load": "${cpu_load}",
   "memory": {
     "total_bytes": ${total:-null},
@@ -138,7 +107,7 @@ collect_json () {
     "free_bytes": ${free_bytes:-null},
     "used_percent": ${mem_percent}
   },
-  "disk_root": ${disk_raw},
+  "disk_root": {"used_bytes":${disk_used:-null}, "size_bytes":${disk_size:-null}, "used_percent":"${disk_percent:-null}"},
   "top_cpu": [${top_cpu}],
   "top_mem": [${top_mem}]
 }
@@ -147,17 +116,22 @@ EOF
 
 # Main loop / execution
 main() {
-  MODE="text"
+  if [[ "${1:-}" == "exporter" ]]; then
+    PORT="${2:-9100}"
+    exec "${ROOT_DIR}/prometheus_exporter.sh" "$PORT"
+  fi
+
   while [[ "${#}" -gt 0 ]]; do
     case "$1" in
       --watch) INTERVAL="${2:-0}"; shift 2;;
-      --json) MODE="json"; shift;;
+      --json) OUTPUT_FORMAT="json"; shift;;
+      --exporter) PROMETHEUS_PORT="${2:-${PROMETHEUS_PORT:-9100}}"; exec "${ROOT_DIR}/prometheus_exporter.sh" "$PROMETHEUS_PORT";;
       --help) usage; exit 0;;
       *) echo "Unknown arg: $1"; usage; exit 2;;
     esac
   done
 
-  if [[ "$MODE" == "json" ]]; then
+  if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
     if [[ "$INTERVAL" -gt 0 ]]; then
       while true; do
         collect_json
