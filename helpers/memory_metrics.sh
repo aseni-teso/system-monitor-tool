@@ -3,7 +3,8 @@
 #
 # Returns:
 #   get_memory_raw() -> "total used free" (integers, bytes)
-#   get_memory_usage_human() -> string  - human-readeble "used/total (XX.XX%)", e.g. "1.2GiB/4.0GiB (30.00%)"
+#   get_memory_usage_human() -> string  - human-readable "used/total (XX.XX%)", e.g. "1.2GiB/4.0GiB (30.00%)"
+#   get_memory_usage_percent() -> float - used percent as number, e.g. "30.00"
 #   read_memory_values() -> prints "total used free" (integers, bytes) for callers to read
 #
 # Output format example:
@@ -33,7 +34,16 @@ get_memory_usage_human() {
   fi
 }
 
-# small wrapper to return raw values to caller
+get_memory_usage_percent() {
+  local total used
+  read -r total used _ < <(free -b | awk '/^Mem:/{print $2, $3, $4}')
+  if [[ -z "$total" || "$total" -eq 0 ]]; then
+    printf "0.00"
+    return 0
+  fi
+  awk -v u="$used" -v t="$total" 'BEGIN{printf "%.2f", u*100/t}'
+}
+
 read_memory_values() {
   read total used free_bytes <<<"$(get_memory_raw)"
   printf "%s %s %s" "${total:-0}" "${used:-0}" "${free_bytes:-0}"

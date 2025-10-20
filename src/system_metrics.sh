@@ -73,6 +73,32 @@ print_top_procs_compact() {
     }'
 }
 
+output_prometheus() {
+  local cpu mem disk
+
+  # defensive calls: suppress helpers stderr, fallback to "0" on error/empty
+  cpu=$(get_cpu_usage 2>/dev/null || echo "0")
+  mem=$(get_memory_usage_percent 2>/dev/null || echo "0")
+  disk=$(get_disk_root_usage_percent 2>/dev/null || echo "0")
+
+  # simple validation: ensure numeric (integer or float), else fallback to 0
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$cpu" 2>/dev/null && cpu="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$mem" 2>/dev/null && mem="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$disk" 2>/dev/null && disk="0"
+
+  cat <<EOF
+# HELP system_cpu_usage_percent System CPU usage percent
+# TYPE system_cpu_usage_percent gauge
+system_cpu_usage_percent ${cpu}
+# HELP system_memory_usage_percent System memory usage percent
+# TYPE system_memory_usage_percent gauge
+system_memory_usage_percent ${mem}
+# HELP system_disk_root_usage_percent System root disk usage percent
+# TYPE system_disk_root_usage_percent gauge
+system_disk_root_usage_percent ${disk}
+EOF
+}
+
 collect_text() {
   local maxcmd
   maxcmd=$(compute_max_cmd)
