@@ -211,3 +211,7 @@ __marimo__/
 *.key
 secrets.yml
 .aws/credentials
+
+# Backups
+*.bkp
+*.bak

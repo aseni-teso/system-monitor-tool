@@ -74,28 +74,53 @@ print_top_procs_compact() {
 }
 
 output_prometheus() {
-  local cpu mem disk
+  local cpu mem_total mem_used mem_free disk_read disk_used disk_size disk_perc
 
   # defensive calls: suppress helpers stderr, fallback to "0" on error/empty
-  cpu=$(get_cpu_usage 2>/dev/null || echo "0")
-  mem=$(get_memory_usage_percent 2>/dev/null || echo "0")
-  disk=$(get_disk_root_usage_percent 2>/dev/null || echo "0")
+  cpu=$(get_cpu_usage 2>/dev/null || echo "0.00")
+
+  read mem_total mem_used mem_free <<< "$(read_memory_values 2>/dev/null || echo "0 0 0")"
+
+  disk_read=$(get_disk_root_bytes 2>/dev/null || echo "0 0 0")
+  read disk_used disk_size disk_perc <<< "$disk_read"
+  disk_perc=${disk_perc%\%}
 
   # simple validation: ensure numeric (integer or float), else fallback to 0
   ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$cpu" 2>/dev/null && cpu="0"
-  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$mem" 2>/dev/null && mem="0"
-  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$disk" 2>/dev/null && disk="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+$/))}' "$mem_total" 2>/dev/null && mem_total="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+$/))}' "$mem_used" 2>/dev/null && mem_used="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+$/))}' "$mem_free" 2>/dev/null && mem_free="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+$/))}' "$disk_size" 2>/dev/null && disk="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+$/))}' "$disk_used" 2>/dev/null && disk="0"
+  ! awk 'BEGIN{exit(!(ARGV[1] ~ /^[0-9]+(\.[0-9]+)?$/))}' "$disk_perc" 2>/dev/null && disk="0"
 
   cat <<EOF
 # HELP system_cpu_usage_percent System CPU usage percent
 # TYPE system_cpu_usage_percent gauge
 system_cpu_usage_percent ${cpu}
-# HELP system_memory_usage_percent System memory usage percent
+
+# HELP system_memory_bytes_total
+# TYPE system_memory_bytes_total gauge
+system_memory_bytes_total ${mem_total}
+# HELP system_memory_bytes_used
+# TYPE system_memory_bytes_used gauge
+system_memory_bytes_used ${mem_used}
+# HELP system_memory_bytes_free
+# TYPE system_memory_bytes_free gauge
+system_memory_bytes_free ${mem_free}
+# HELP system_memory_usage_percent
 # TYPE system_memory_usage_percent gauge
-system_memory_usage_percent ${mem}
-# HELP system_disk_root_usage_percent System root disk usage percent
+system_memory_usage_percent $(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN{printf "%.2f", (t>0)?u*100/t:0}')
+
+# HELP system_disk_root_bytes_total
+# TYPE system_disk_root_bytes_total gauge
+system_disk_root_bytes_total ${disk_size}
+# HELP system_disk_root_bytes_used
+# TYPE system_disk_root_bytes_used gauge
+system_disk_root_bytes_used ${disk_used}
+# HELP system_disk_root_usage_percent
 # TYPE system_disk_root_usage_percent gauge
-system_disk_root_usage_percent ${disk}
+system_disk_root_usage_percent ${disk_perc}
 EOF
 }
 
@@ -142,16 +167,20 @@ EOF
 
 # Main loop / execution
 main() {
+  if [[ -n "${PROMETHEUS:-}" ]]; then
+    OUTPUT_FORMAT="prometheus"
+    RED=''; YELLOW=''; GREEN=''; BLUE=''; NC=''
+  fi
   if [[ "${1:-}" == "exporter" ]]; then
     PORT="${2:-9100}"
-    exec "${ROOT_DIR}/prometheus_exporter.sh" "$PORT"
+    exec "${SCRIPT_DIR}/prometheus_exporter.sh" "$PORT"
   fi
 
   while [[ "${#}" -gt 0 ]]; do
     case "$1" in
       --watch) INTERVAL="${2:-0}"; shift 2;;
       --json) OUTPUT_FORMAT="json"; shift;;
-      --exporter) PROMETHEUS_PORT="${2:-${PROMETHEUS_PORT:-9100}}"; exec "${ROOT_DIR}/prometheus_exporter.sh" "$PROMETHEUS_PORT";;
+      --exporter) PROMETHEUS_PORT="${2:-${PROMETHEUS_PORT:-9100}}"; exec "${SCRIPT_DIR}/prometheus_exporter.sh" "$PROMETHEUS_PORT";;
       --help) usage; exit 0;;
       *) echo "Unknown arg: $1"; usage; exit 2;;
     esac
@@ -165,6 +194,18 @@ main() {
       done
     else
       collect_json
+    fi
+    return 0
+  fi
+
+  if [[ "$OUTPUT_FORMAT" == "prometheus" ]]; then
+    if [[ "$INTERVAL" -gt 0 ]]; then
+      while true; do
+        output_prometheus
+        sleep "$INTERVAL"
+      done
+    else
+      output_prometheus
     fi
     return 0
   fi
