@@ -213,5 +213,5 @@ secrets.yml
 .aws/credentials
 
 # Backups
-*.bkp
-*.bak
+*.bkp*
+*.bak*

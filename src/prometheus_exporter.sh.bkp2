@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Simple Prometheus exporter using netcat (nc or ncat).
+# Listens on a TCP port and returns metrics in Prometheus text format.
+# Usage: ./prometheus_exporter.sh [PORT]
+#
+# Behavior:
+# - Finds an available nc-like binary (ncat or nc).
+# - On each connection, runs the metrics generator script (system_metrics.sh)
+#   and returns an HTTP/1.1 response with Content-Type: text/plain; version=0.0.4.
+# - For nc that supports -q, uses -q 1 to close after sending. For ncat, uses --sh-exec
+#   to run a small inline handler. The exporter ignores the incoming HTTP request
+#   payload and always returns the latest metrics snapshot.
+#
+# Requirements:
+# - system_metrics.sh must be executable and located next to this script:
+#     ./src/system_metrics.sh
+# - netcat (nc) or ncat must be installed.
+#
+# Notes:
+# - This script avoids trying to change behavior of the main metrics script;
+#   it simply executes it and returns its stdout as the Prometheus payload.
+# - Keep the implementation minimal and robust: no background daemons or PID files.
+
+PORT="${1:-${EXPORTER_PORT:-9100}}"
+HOST="${2:-0.0.0.0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+METRICS_BIN="${SCRIPT_DIR}/system_metrics.sh"
+
+# Ensure python3 present
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 required" >&2
+  exit 2
+fi
+
+# Small HTTP server in Python that invokes the metrics generator per request
+exec python3 - <<PY
+import os,subprocess,sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+HOST = "${HOST}"
+PORT = int("${PORT}")
+
+METRICS_BIN = os.path.join("${SCRIPT_DIR}", "system_metrics.sh")
+
+class Handler(Base)
+
+# Find nc-like binary
+find_nc() {
+  for cmd in ncat nc; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      echo "$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
+NC_BIN="$(find_nc || true)"
+if [[ -z "$NC_BIN" ]]; then
+  echo "Error: netcat (nc) or ncat required" >&2
+  exit 2
+fi
+
+# Generate metrics by executing the metrics script.
+# We try a couple of invocations:
+# 1) If the metrics script supports a mode to output Prometheus format directly,
+#     prefer that. Common safe approach: set an env var PROMETHEUS=1 so the script
+#     can detect it if implemented.
+# 2) Fallback to running the script and using whatever it outputs.
+generate_metrics() {
+  if [[ ! -x "$METRICS_BIN" ]]; then
+    echo ""
+    return
+  fi
+
+  PROMETHEUS=1 "$METRICS_BIN" 2>/dev/null || "$METRICS_BIN" 2>/dev/null || true
+}
+
+serve_once_fifo() {
+  local fifo="$1"
+  METS="$(generate_metrics)"
+  if [[ -z "$METS" ]]; then
+    printf 'HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nfailed to generate metrics' >"$fifo"
+  else
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nConnection: close\r\n\r\n%s' "$METS" >"$fifo"
+  fi
+}
+
+case "$(basename "$NC_BIN")" in
+  ncat)
+    # Use ncat --sh-exec to run a small handler on each connection.
+    # The inline handler executes a bash snippet that runs the metrics generator
+    # and writes an HTTP response to the socket.
+    NC_PATH="$(command -v ncat)"
+    while true; do
+      $NC_PATH -l "$HOST" "$PORT" --keep-open --no-shutdown --sh-exec \
+        "bashc -c 'PROMETHEUS=1 \"$METRICS_BIN\" 2>/dev/null || true | sed \"1iHTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nConnection: close\r\n\"'" || true
+    done
+    ;;
+  nc)
+    # For traditional nc, run a loop: for each connection, pipe the HTTP response into nc.
+    NC_PATH="$(command -v nc)"
+    while true; do
+      FIFO="/tmp/metrics_fifo_$"
+      mkfifo "$FIFO"
+      serve_once_fifo "$FIFO" &
+      if $NC_PATH -h 2>&1 | grep -q -- '-s'; then
+        $NC_PATH -l -p "$PORT" -s "$HOST" <"$FIFO"
+      else
+        $NC_PATH -l -p "$PORT" <"$FIFO"
+      fi
+      rm -f "$FIFO"
+    done
+    ;;
+  *)
+    echo "Unsupported nc binary: $NC_BIN" >&2
+    exit 3
+    ;;
+esac

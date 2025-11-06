@@ -1,0 +1,6 @@
+.git
+.gitignore
+.venv
+*.log
+*.bkp
+*.bak
