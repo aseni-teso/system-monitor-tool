@@ -1,0 +1,46 @@
+name: CI - tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services: {}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for cross-builds, optional)
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build runtime image for tests
+        run: |
+          docker build --target runtime -t system-monitor-test:ci .
+
+      - name: Run tests inside container (with /proc and /sys mounted)
+        run: |
+          docker run --rm \
+            --mount type=bind,source=${{ github.workspace }},target=/workdir \
+            -v /proc:/proc:ro \
+            -v /sys:/sys:ro \
+            -e COLLECTION_INTERVAL=0 \
+            -e OUTPUT_FORMAT=text \
+            --workdir /workdir \
+            system-monitor-test:ci \
+            bash -c "chmod +x /workdir/tests/test_core_metrics.sh && /workdir/tests/test_core_metrics.sh"
+          # note: running tests inside inside the built image ensures same runtime deps (ps, df, python etc.)
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: error
+
+      # - name: Run ShellCheck on scripts
+      #   run: |
+      #     # target all scripts in repo
+      #     find . -type f -name ''.sh -print0 | xargs -0 shellcheck -x -S info
+
+

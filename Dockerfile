@@ -12,7 +12,7 @@ COPY README.md LICENSE ./
 RUN chmod +x ./src/*.sh ./helpers/*.sh
 
 # Stage 2: runtime
-FROM alpine:3.22
+FROM alpine:3.22 AS runtime
 
 RUN apk add --no-cache bash procps curl tini python3
 

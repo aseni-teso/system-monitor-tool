@@ -13,8 +13,17 @@
 
 set -uo pipefail
 
+: "${HOST_PROC:=/proc}"
+
+_get_meminfo() {
+  local f="$HOST_PROC/meminfo"
+  if [[ ! -r "$f" ]]; then
+    return 1
+  fi
+  cat "$f"
+}
 get_memory_raw() {
-  free -b | awk '/^Mem:/ {printf "%d %d %d",$2,$3,$4}'
+  read_memory_values
 }
 
 get_memory_usage_human() {
@@ -45,6 +54,28 @@ get_memory_usage_percent() {
 }
 
 read_memory_values() {
-  read total used free_bytes <<<"$(get_memory_raw)"
-  printf "%s %s %s" "${total:-0}" "${used:-0}" "${free_bytes:-0}"
+  local memfile="${HOST_PROC:-/proc}/meminfo"
+  if [[ ! -r "$memfile" ]]; then
+    printf "0 0 0"
+    return 0
+  fi
+  awk '
+    /^MemTotal:/ { total_k=$2; next }
+    /^MemAvailable:/ { avail_k=$2; next }
+    /^MemFree:/ { free_k=$2; next }
+    END {
+      if (total_k ~ /^[0-9]+$/) {
+        if (avail_k ~ /^[0-9]+$/) {
+          used_k = total_k - avail_k
+          free_k = avail_k
+        } else if (free_k ~ /^[0-9]+$/) {
+          used_k = total_k - avail_k
+        } else {
+          used_k = "0"; free_k="0"
+        }
+        printf "%d %d %d", total_k*1024, (used_k+0)*1024, (free_k+0)*1024
+      } else {
+        printf "0 0 0"
+      }
+    }'
 }
