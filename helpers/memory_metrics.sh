@@ -59,24 +59,33 @@ read_memory_values() {
     printf "0 0 0"
     return 0
   fi
-  awk '
-    /^MemTotal:/ { total_k=$2; next }
-    /^MemAvailable:/ { avail_k=$2; next }
-    /^MemFree:/ { free_k=$2; next }
-    END {
-      if (total_k ~ /^[0-9]+$/) {
-        if (avail_k ~ /^[0-9]+$/) {
-          used_k = total_k - avail_k
-          free_k = avail_k
-        } else if (free_k ~ /^[0-9]+$/) {
-          used_k = total_k - free_k
-          free_k = free_k
+
+  read total_k used_k free_k < <(
+    awk '
+      /^MemTotal:/ { total_k=$2 }
+      /^MemAvailable:/ { avail_k=$2 }
+      /^MemFree:/ { free_k=$2 }
+      END {
+        if (total_k ~ /^[0-9]+$/) {
+          if (avail_k ~ /^[0-9]+$/) {
+            used_k = total_k - avail_k
+            free_k = avail_k
+          } else if (free_k ~ /^[0-9]+$/) {
+            used_k = total_k - free_k
+          } else {
+            used_k = 0; free_k=0
+          }
+          printf "%d %d %d", total_k, used_k, free_k
         } else {
-          used_k = 0; free_k=0
+          printf "0 0 0"
         }
-        printf "%d %d %d", total_k*1024, used_k*1024, free_k*1024
-      } else {
-        printf "0 0 0"
-      }
-    }' "$memfile"
+      }' "$memfile"
+    )
+
+    # Convert kB -> bytes in bash (64-bit safe)
+    total=$(( (total_k + 0) * 1024 ))
+    used=$(( (used_k + 0) * 1024 ))
+    free_bytes=$(( (free_k + 0) * 1024 ))
+
+    printf "%d %d %d" "$total" "$used" "$free_bytes"
 }
