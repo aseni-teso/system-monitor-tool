@@ -27,7 +27,7 @@ get_memory_raw() {
 }
 
 get_memory_usage_human() {
-  read total used free_bytes <<<"$(_getmem=$(get_memory_raw); echo "$_getmem")"
+  read total used free_bytes <<<"$(get_memory_raw)"
   if [[ -n "$total" && "$total" -gt 0 ]]; then
     mem_percent=$(LC_NUMERIC=C awk -v u="$used" -v t="$total" 'BEGIN{OFS="."; printf "%.2f", u*100/t}')
     if command -v numfmt >/dev/null 2>&1; then
@@ -69,13 +69,14 @@ read_memory_values() {
           used_k = total_k - avail_k
           free_k = avail_k
         } else if (free_k ~ /^[0-9]+$/) {
-          used_k = total_k - avail_k
+          used_k = total_k - free_k
+          free_k = free_k
         } else {
-          used_k = "0"; free_k="0"
+          used_k = 0; free_k=0
         }
-        printf "%d %d %d", total_k*1024, (used_k+0)*1024, (free_k+0)*1024
+        printf "%d %d %d", total_k*1024, used_k*1024, free_k*1024
       } else {
         printf "0 0 0"
       }
-    }'
+    }' "$memfile"
 }
