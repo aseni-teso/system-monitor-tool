@@ -10,7 +10,8 @@
 #   $ get_disk_root_bytes
 #   12345678 98765432 12%
 
-set -uo pipefail
+set -euo pipefail
+export HOST_PROC="${HOST_PROC:-/proc}"
 
 get_disk_root_bytes() {
   df -B1 / 2>/dev/null | awk 'NR==2{print $3,$2,$5}'

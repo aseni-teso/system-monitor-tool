@@ -13,6 +13,7 @@
 #   - expects `uptime` (POSIX) and/or /proc/stat for alternative implementations.
 
 set -uo pipefail
+: "${HOST_PROC:=/proc}"
 
 get_cpu_load() {
   uptime | awk -F'load average:' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}'
@@ -21,11 +22,11 @@ get_cpu_load() {
 get_cpu_usage() {
   # simple implementation use /proc/stat to compute busy/total over short interval
   local a b idle1 total1 idle2 total2 diff_idle diff_total busy
-  read -r _ a b c d e f g h i j < /proc/stat
+  read -r _ a b c d e f g h i j < "${HOST_PROC}/stat"
   idle1=$d
   total1=$((a + b + c + d + e + f + g + h + i + j))
   sleep 0.1
-  read -r _ a b c d e f g h i j < /proc/stat
+  read -r _ a b c d e f g h i j < "${HOST_PROC}/stat"
   idle2=$d
   total2=$((a + b + c + d + e + f + g + h + i + j))
   diff_idle=$((idle2 - idle1))

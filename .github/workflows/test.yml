@@ -16,6 +16,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      - name: Create /proc snapshot for tests
+        run: |
+          ./tests/create_proc_snapshot.sh ./proc_snapshot
+
       - name: Build runtime image for tests
         run: |
           docker build --target runtime -t system-monitor-test:ci .
@@ -24,14 +28,13 @@ jobs:
         run: |
           docker run --rm \
             --mount type=bind,source=${{ github.workspace }},target=/workdir \
-            -v /proc:/proc:ro \
-            -v /sys:/sys:ro \
             -e COLLECTION_INTERVAL=0 \
             -e OUTPUT_FORMAT=text \
+            -e HOST_PROC=/host/proc \
             --workdir /workdir \
             system-monitor-test:ci \
             bash -c "chmod +x /workdir/tests/test_core_metrics.sh && /workdir/tests/test_core_metrics.sh"
-          # note: running tests inside inside the built image ensures same runtime deps (ps, df, python etc.)
+          # note: running tests inside inside the built image using a copied /proc snapshot
 
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
