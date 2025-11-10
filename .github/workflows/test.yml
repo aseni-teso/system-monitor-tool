@@ -28,12 +28,13 @@ jobs:
         run: |
           docker run --rm \
             --mount type=bind,source=${{ github.workspace }},target=/workdir \
+            -v ${{ github.workspace }}/proc_snapshot:/host/proc:ro \
             -e COLLECTION_INTERVAL=0 \
             -e OUTPUT_FORMAT=text \
             -e HOST_PROC=/host/proc \
             --workdir /workdir \
             system-monitor-test:ci \
-            bash -c "chmod +x /workdir/tests/test_core_metrics.sh && /workdir/tests/test_core_metrics.sh"
+            bash -c "bash /workdir/tests/test_core_metrics.sh"
           # note: running tests inside inside the built image using a copied /proc snapshot
 
       - name: Run ShellCheck
