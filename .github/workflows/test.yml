@@ -24,6 +24,12 @@ jobs:
         run: |
           docker build --target runtime -t system-monitor-test:ci .
 
+      - name: Prepare test log file
+        run: |
+          mkdir -p tests
+          touch tests/test_run.log
+          chmod 666 tests/test_run.log
+
       - name: Run tests inside container (with /proc and /sys mounted)
         run: |
           docker run --rm \
