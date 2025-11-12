@@ -34,7 +34,7 @@ jobs:
             -e HOST_PROC=/host/proc \
             --workdir /workdir \
             system-monitor-test:ci \
-            bash -c "bash /workdir/tests/test_core_metrics.sh"
+            bash -c "bash /workdir/tests/test_core_metrics.sh 2>&1 | tee /workdir/tests/test_run.log; echo EXIT=\$?; exit \${PIPESTATUS[0]}"
           # note: running tests inside inside the built image using a copied /proc snapshot
 
       - name: Run ShellCheck
