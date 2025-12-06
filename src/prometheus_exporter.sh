@@ -15,9 +15,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
+export PROMETHEUS=1
 (
   while true; do
-    PROMETHEUS=1 "$METRICS_BIN" > "$CACHE_FILE" 2> "$ERR_FILE" || true
+    PROMETHEUS=1 "$METRICS_BIN" | sed -r 's/\x1B\[[0-9;]*[mK]//g' > "$CACHE_FILE" 2> "$ERR_FILE" || true
     sleep "$REFRESH_INTERVAL"
   done
   ) &

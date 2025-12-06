@@ -14,7 +14,7 @@ RUN chmod +x ./src/*.sh ./helpers/*.sh
 # Stage 2: runtime
 FROM alpine:3.22 AS runtime
 
-RUN apk add --no-cache bash procps curl tini python3
+RUN apk add --no-cache bash procps curl tini python3 coreutils
 
 RUN addgroup -S -g 1000 appgroup && adduser -S -u 1000 -G appgroup appuser
 
@@ -40,4 +40,4 @@ EXPOSE 9100
 USER appuser
 
 ENTRYPOINT ["/tini", "--"]
-CMD [ "./src/system_metrics.sh" ]
+CMD [ "./src/prometheus_exporter.sh" ]
